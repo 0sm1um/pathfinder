@@ -5,15 +5,14 @@ import numpy as np
 
 def generate_dataset():
     matrix = tile_map(num_tiles = 6)
-    
     intersections = labelIntersections(matrix)
-        
-    position_paths, models = generate_paths(matrix)
+    oneWayUp, oneWayRight, oneWayDown, oneWayLeft = labelOneWayStreet(matrix)
+    position_paths, models = generate_paths(matrix,oneWayUp,oneWayRight,oneWayDown,oneWayLeft)
     
-    print(intersections)
-    print(position_paths[25])
-    print(models[25])
-    print('hello world')
+#    print(intersections)
+#    print(position_paths[25])
+#    print(models[25])
+#    print('hello world')
 
 def tile_map(num_tiles):
     '''
@@ -50,7 +49,8 @@ def tile_map(num_tiles):
     matrix = np.concatenate([np.ones([1,matrix.shape[0]]),matrix])
     matrix = np.concatenate([matrix,np.ones([matrix.shape[0],1])],axis=1)
     return matrix
-def generate_paths(matrix):
+
+def generate_paths(matrix,oneWayUp,oneWayRight,oneWayDown,oneWayLeft):
     grid = Grid(matrix=matrix)
     finder = AStarFinder()
     position = []
@@ -67,9 +67,9 @@ def generate_paths(matrix):
             grid.cleanup()
             reversePath,runs = finder.find_path(end,start,grid)
             relativePath = coordinate2relative(path) # Map from coordinates to directional sequence
-            # Legality Check goes here
+            # Legality Check for forward path goes here
             reverseRelativePath = coordinate2relative(reversePath)
-            # Legality Check goes here
+            # Legality Check for reverse path goes here
             position.append(path)
             position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
@@ -85,8 +85,9 @@ def generate_paths(matrix):
             grid.cleanup()
             reversePath,runs = finder.find_path(end,start,grid)
             relativePath = coordinate2relative(path) # Map from coordinates to directional sequence
+            # Legality Check for forward path goes here
             reverseRelativePath = coordinate2relative(reversePath)
-            # Legality Check goes here
+            # Legality Check for reverse path goes here
             position.append(path)
             position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
@@ -97,6 +98,7 @@ def generate_paths(matrix):
         print(grid.grid_str(path=paths[i], start=start, end=end))
     print(len(paths))
     '''
+    print(grid.grid_str(path=path, start=start, end=end))
     return position, models
 
 def coordinate2relative(path):
@@ -154,8 +156,27 @@ def labelIntersections(matrix):
     return list(set([i for i in intersections]))
 
 def labelOneWayStreet(matrix):
-    pass
-def check_legality():
-    pass
+    ''' Note that these streets were arbitrarily chosen. Choosing these
+    4 streets were simply aesthetically pleasing.'''
+    boundary_index = matrix.shape[0]-1
+    oneWayUp = []
+    oneWayRight = []
+    oneWayDown = []
+    oneWayLeft = []
+    for i in range(boundary_index):
+        oneWayUp.append((24,i))
+    for i in range(boundary_index):
+        oneWayRight.append((i,12))
+    for i in range(boundary_index):
+        oneWayDown.append((12,i))
+    for i in range(boundary_index):
+        oneWayLeft.append((24,i))
+    return oneWayUp, oneWayRight, oneWayDown, oneWayLeft
+
+def check_legality(path,relativePath,oneWayUp,oneWayRight,oneWayDown,oneWayLeft):
+    for i in range(len(path)):
+        for j in range(len(oneWayUp)):
+            if path[i] == 
+    return 
 
 generate_dataset()
