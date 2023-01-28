@@ -6,13 +6,13 @@ import numpy as np
 def generate_dataset():
     matrix = tile_map(num_tiles = 6)
     
-    
+    intersections = labelIntersections(matrix)
+        
     position_paths, models = generate_paths(matrix)
     
-    print(position_paths[500])
-    
-    
-    
+    print(intersections)
+    print(position_paths[25])
+    print(models[25])
     print('hello world')
 
 def tile_map(num_tiles):
@@ -56,34 +56,42 @@ def generate_paths(matrix):
     position = []
     models = []
     boundary_index = matrix.shape[0]-1
-    
+
     for i in range(boundary_index):
-        grid.cleanup()
         start = grid.node(0,i) # Left Wall
         for j in range(boundary_index):
             grid.cleanup()
             end = grid.node(boundary_index,j) # Right Wall
-            path = finder.find_path(start,end,grid)
-            relativePath = coordinate2relative(path)
-            # Map from coordinates to directional sequence
+            path,runs = finder.find_path(start,end,grid)
+            # Generate path in opposite direction
+            grid.cleanup()
+            reversePath,runs = finder.find_path(end,start,grid)
+            relativePath = coordinate2relative(path) # Map from coordinates to directional sequence
+            # Legality Check goes here
+            reverseRelativePath = coordinate2relative(reversePath)
             # Legality Check goes here
             position.append(path)
+            position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
-    
-    print(grid.grid_str(path=path, start=start, end=end))
+            models.append(relative2motionmodel(reverseRelativePath))
     
     for i in range(boundary_index):
-        grid.cleanup()
         start = grid.node(i,0) # Bottom Wall
         for j in range(boundary_index):
+            grid.cleanup()
             end = grid.node(boundary_index,j) # Right Wall
-            path = finder.find_path(start,end,grid)
-            relativePath = coordinate2relative(path)
-            # Map from coordinates to directional sequence
+            path,runs = finder.find_path(start,end,grid)
+            # Generate path in opposite direction
+            grid.cleanup()
+            reversePath,runs = finder.find_path(end,start,grid)
+            relativePath = coordinate2relative(path) # Map from coordinates to directional sequence
+            reverseRelativePath = coordinate2relative(reversePath)
             # Legality Check goes here
             position.append(path)
+            position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
-    
+            models.append(relative2motionmodel(reverseRelativePath))
+
     ''' This is a block of code to print trajectories.
     for i in range(len(paths)):
         print(grid.grid_str(path=paths[i], start=start, end=end))
@@ -120,7 +128,33 @@ def relative2motionmodel(path):
                 path[i-1] = 'Left Turn'
     return path
 
+#def detectIntersections(models):
+#    # Find a turn
+#    pass
 
+def labelIntersections(matrix):
+    # First we need to label intersections.
+    intersections = []
+    boundary_index = matrix.shape[0]-1
+    # Start by labelling the boundary.
+    for i in range(boundary_index):
+        if i % 6 == 0:
+            intersections.append((0,i))
+            intersections.append((i,0))
+            intersections.append((boundary_index,i))
+            intersections.append((i,boundary_index))
+            # Once an intersection is identified on the boundary, iterate across
+            for j in range(1,boundary_index):
+                if j % 6 == 0 and i != 0:
+                    intersections.append((j,i)) # Mark Intersections Horizontally
+                    intersections.append((j-1,i)) # Mark Adjacent Points Horizontally
+                    intersections.append((j+1,i)) # Mark Adjacent Point Horizontally
+                    intersections.append((i,j-1))# Mark Adjacent Points Vertically
+                    intersections.append((i,j+1)) # Mark Adjacent Point Vertically
+    return list(set([i for i in intersections]))
+
+def labelOneWayStreet(matrix):
+    pass
 def check_legality():
     pass
 
