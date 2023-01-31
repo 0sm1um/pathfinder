@@ -5,14 +5,11 @@ import numpy as np
 
 def generate_dataset():
     matrix = tile_map(num_tiles = 6)
-    intersections = labelIntersections(matrix)
-    oneWayUp, oneWayRight, oneWayDown, oneWayLeft = labelOneWayStreet(matrix)
-    position_paths, models = generate_paths(matrix,oneWayUp,oneWayRight,oneWayDown,oneWayLeft)
-    
-#    print(intersections)
-#    print(position_paths[25])
-#    print(models[25])
-#    print('hello world')
+    intersectionLabels = labelIntersections(matrix)
+    oneWayLabels = labelOneWayStreet(matrix)
+    position_paths, models = generate_paths(matrix,oneWayLabels)
+    print('Trajectory Data Complete')
+    return position_paths, models, intersectionLabels, oneWayLabels
 
 def tile_map(num_tiles):
     '''
@@ -50,44 +47,30 @@ def tile_map(num_tiles):
     matrix = np.concatenate([matrix,np.ones([matrix.shape[0],1])],axis=1)
     return matrix
 
-def generate_paths(matrix,oneWayUp,oneWayRight,oneWayDown,oneWayLeft):
-    grid = Grid(matrix=matrix)
-    finder = AStarFinder()
+def generate_paths(matrix,oneWayLabels):
     position = []
     models = []
     boundary_index = matrix.shape[0]-1
 
     for i in range(boundary_index):
-        start = grid.node(0,i) # Left Wall
+        start = (0,i) # Left Wall
         for j in range(boundary_index):
-            grid.cleanup()
-            end = grid.node(boundary_index,j) # Right Wall
-            path,runs = finder.find_path(start,end,grid)
-            # Generate path in opposite direction
-            grid.cleanup()
-            reversePath,runs = finder.find_path(end,start,grid)
-            relativePath = coordinate2relative(path) # Map from coordinates to directional sequence
-            # Legality Check for forward path goes here
-            reverseRelativePath = coordinate2relative(reversePath)
-            # Legality Check for reverse path goes here
+            matrix = tile_map(num_tiles = 6)
+            end = (boundary_index,j) # Right Wall
+            path,relativePath = generateLegalPath(matrix,start,end,oneWayLabels)
+            reversePath,reverseRelativePath = generateLegalPath(matrix,end,start,oneWayLabels)
             position.append(path)
             position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
             models.append(relative2motionmodel(reverseRelativePath))
-    
+            
     for i in range(boundary_index):
-        start = grid.node(i,0) # Bottom Wall
+        start = (i,0) # Bottom Wall
         for j in range(boundary_index):
-            grid.cleanup()
-            end = grid.node(boundary_index,j) # Right Wall
-            path,runs = finder.find_path(start,end,grid)
-            # Generate path in opposite direction
-            grid.cleanup()
-            reversePath,runs = finder.find_path(end,start,grid)
-            relativePath = coordinate2relative(path) # Map from coordinates to directional sequence
-            # Legality Check for forward path goes here
-            reverseRelativePath = coordinate2relative(reversePath)
-            # Legality Check for reverse path goes here
+            matrix = tile_map(num_tiles = 6)
+            end = (i,boundary_index) # Top Wall
+            path,relativePath = generateLegalPath(matrix,start,end,oneWayLabels)
+            reversePath,reverseRelativePath = generateLegalPath(matrix,end,start,oneWayLabels)
             position.append(path)
             position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
@@ -95,14 +78,13 @@ def generate_paths(matrix,oneWayUp,oneWayRight,oneWayDown,oneWayLeft):
 
     ''' This is a block of code to print trajectories.
     for i in range(len(paths)):
-        print(grid.grid_str(path=paths[i], start=start, end=end))
+        print(grid.grid_str(path=position[i]))
     print(len(paths))
     '''
-    print(grid.grid_str(path=path, start=start, end=end))
     return position, models
 
 def coordinate2relative(path):
-    relativepath = []
+    relativepath = ['Start']
     for i in range(1,len(path)):
         if np.array_equal((np.array(path[i])-np.array(path[i-1])),np.array([0,1])) == True:
             relativepath.append('Up')
@@ -114,25 +96,20 @@ def coordinate2relative(path):
             relativepath.append('Right')
     return relativepath
 
-def relative2motionmodel(path):
-    for i in range(1,len(path)):
-        # Check if a turn occured
-        if path[i] != path[i-1]:
-            if path[i-1] == 'Up' and path[i] == 'Right':
-                path[i-1] = 'Right Turn'
-            elif path[i-1] == 'Right' and path[i] == 'Down':
-                path[i-1] = 'Right Turn'
-            elif path[i-1] == 'Down' and path[i] == 'Left':
-                path[i-1] = 'Right Turn'
-            elif path[i-1] == 'Left' and path[i] == 'Up':
-                path[i-1] = 'Right Turn'
+def relative2motionmodel(relativePath):
+    for i in range(2,len(relativePath)): # First entry has no direction and is labelled 'Start'
+        if relativePath[i] != relativePath[i-1]: # Check if a turn occured
+            if relativePath[i-1] == 'Up' and relativePath[i] == 'Right':
+                relativePath[i-1] = 'Right Turn'
+            elif relativePath[i-1] == 'Right' and relativePath[i] == 'Down':
+                relativePath[i-1] = 'Right Turn'
+            elif relativePath[i-1] == 'Down' and relativePath[i] == 'Left':
+                relativePath[i-1] = 'Right Turn'
+            elif relativePath[i-1] == 'Left' and relativePath[i] == 'Up':
+                relativePath[i-1] = 'Right Turn'
             else:
-                path[i-1] = 'Left Turn'
-    return path
-
-#def detectIntersections(models):
-#    # Find a turn
-#    pass
+                relativePath[i-1] = 'Left Turn'
+    return relativePath
 
 def labelIntersections(matrix):
     # First we need to label intersections.
@@ -151,7 +128,7 @@ def labelIntersections(matrix):
                     intersections.append((j,i)) # Mark Intersections Horizontally
                     intersections.append((j-1,i)) # Mark Adjacent Points Horizontally
                     intersections.append((j+1,i)) # Mark Adjacent Point Horizontally
-                    intersections.append((i,j-1))# Mark Adjacent Points Vertically
+                    intersections.append((i,j-1)) # Mark Adjacent Points Vertically
                     intersections.append((i,j+1)) # Mark Adjacent Point Vertically
     return list(set([i for i in intersections]))
 
@@ -159,24 +136,37 @@ def labelOneWayStreet(matrix):
     ''' Note that these streets were arbitrarily chosen. Choosing these
     4 streets were simply aesthetically pleasing.'''
     boundary_index = matrix.shape[0]-1
-    oneWayUp = []
-    oneWayRight = []
-    oneWayDown = []
-    oneWayLeft = []
+    oneWay = []
     for i in range(boundary_index):
-        oneWayUp.append((24,i))
-    for i in range(boundary_index):
-        oneWayRight.append((i,12))
-    for i in range(boundary_index):
-        oneWayDown.append((12,i))
-    for i in range(boundary_index):
-        oneWayLeft.append((24,i))
-    return oneWayUp, oneWayRight, oneWayDown, oneWayLeft
+        oneWay.append((24,i,'Down'))
+        oneWay.append((i,12,'Left'))
+        oneWay.append((12,i,'Up'))
+        oneWay.append((i,24,'Right'))
+    return oneWay
 
-def check_legality(path,relativePath,oneWayUp,oneWayRight,oneWayDown,oneWayLeft):
-    for i in range(len(path)):
-        for j in range(len(oneWayUp)):
-            if path[i] == 
-    return 
+def generateLegalPath(matrix,start,end,oneWay):
+    pathIsLegal = False
+    grid = Grid(matrix=matrix)
+    finder = AStarFinder()
+    path,runs = finder.find_path(grid.node(start[0],start[1]),grid.node(end[0],end[1]),grid) # Find Initial Path
+    relativePath = coordinate2relative(path)
+    oneWayCoordinates = [(e[0],e[1]) for e in oneWay]
+    oneWayDirections = [e[2] for e in oneWay]
+    while pathIsLegal == False: # Legality Check
+        for i in range(len(path)):
+            for j in range(len(oneWayCoordinates)):
+                if path[i] == oneWayCoordinates[j] and oneWayDirections[j] == relativePath[i]: # Check if target travel in prohibited direction
+                    grid.cleanup()
+                    matrix[path[i][0]][path[i][1]] = 0
+                    grid = Grid(matrix=matrix)
+                    path,runs = finder.find_path(grid.node(start[0],start[1]),grid.node(end[0],end[1]),grid) # Find New Path
+                    relativePath = coordinate2relative(path)
+                    break
+                else:
+                    #print('path is legal')
+                    continue
+                break
+        pathIsLegal = True
+    return path, relativePath
 
 generate_dataset()
