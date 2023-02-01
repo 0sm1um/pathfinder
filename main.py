@@ -9,6 +9,7 @@ def generate_dataset():
     oneWayLabels = labelOneWayStreet(matrix)
     position_paths, models = generate_paths(matrix,oneWayLabels)
     print('Trajectory Data Complete')
+    formTensor(position_paths,models,intersectionLabels,oneWayLabels)
     return position_paths, models, intersectionLabels, oneWayLabels
 
 def tile_map(num_tiles):
@@ -157,16 +158,45 @@ def generateLegalPath(matrix,start,end,oneWay):
             for j in range(len(oneWayCoordinates)):
                 if path[i] == oneWayCoordinates[j] and oneWayDirections[j] == relativePath[i]: # Check if target travel in prohibited direction
                     grid.cleanup()
-                    matrix[path[i][0]][path[i][1]] = 0
+                    matrix[path[i][0]][path[i][1]] = 0 # Add obstacle
                     grid = Grid(matrix=matrix)
                     path,runs = finder.find_path(grid.node(start[0],start[1]),grid.node(end[0],end[1]),grid) # Find New Path
                     relativePath = coordinate2relative(path)
                     break
                 else:
-                    #print('path is legal')
                     continue
                 break
         pathIsLegal = True
     return path, relativePath
+
+def formTensor(position_paths,models,intersectionLabels,oneWayLabels):
+    tensor = []
+    intersections = []
+    oneWay = []
+    oneWayCoordinates = [(e[0],e[1]) for e in oneWayLabels]
+    oneWayDirections = [e[2] for e in oneWayLabels]
+    for i in range(len(position_paths)): # Iterate through each Path
+        for j in range(len(position_paths[i])): #Check each point in trajectory
+            for k in range(len(intersectionLabels)):
+                if position_paths[i][j] == intersectionLabels[k]:
+                    intersections.append(True)
+                    break
+                if k == len(intersectionLabels)-1:
+                    intersections.append(False)
+            for k in range(len(oneWayLabels)):
+                if position_paths[i][j] == oneWayCoordinates[k]:
+                    oneWay.append(oneWayDirections[k])
+                    break
+                if k == len(oneWayLabels)-1:
+                    oneWay.append(False)
+        tensor.append((position_paths[i],models[i],intersections,oneWay))
+        intersections = []
+        oneWay = []
+    print(tensor[0])
+    print(len(tensor[0][0]))
+    print(len(tensor[0][1]))
+    print(len(tensor[0][2]))
+    print(len(tensor[0][3]))
+    return 0
 
 generate_dataset()
