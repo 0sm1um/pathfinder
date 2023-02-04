@@ -2,6 +2,9 @@ from pathfinding.core.grid import Grid
 from pathfinding.finder.a_star import AStarFinder
 import numpy as np
 
+import torch
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 
 def generate_dataset():
     matrix = tile_map(num_tiles = 6)
@@ -9,8 +12,9 @@ def generate_dataset():
     oneWayLabels = labelOneWayStreet(matrix)
     position_paths, models = generate_paths(matrix,oneWayLabels)
     print('Trajectory Data Complete')
-    formTensor(position_paths,models,intersectionLabels,oneWayLabels)
-    return position_paths, models, intersectionLabels, oneWayLabels
+    rawData = formatData(position_paths,models,intersectionLabels,oneWayLabels)
+    formTensor(rawData,device)
+    return rawData
 
 def tile_map(num_tiles):
     '''
@@ -169,10 +173,14 @@ def generateLegalPath(matrix,start,end,oneWay):
         pathIsLegal = True
     return path, relativePath
 
-def formTensor(position_paths,models,intersectionLabels,oneWayLabels):
+def formatData(position_paths,models,intersectionLabels,oneWayLabels):
     tensor = []
     intersections = []
     oneWay = []
+    oneWayUp = []
+    oneWayRight = []
+    oneWayDown = []
+    oneWayLeft = []
     oneWayCoordinates = [(e[0],e[1]) for e in oneWayLabels]
     oneWayDirections = [e[2] for e in oneWayLabels]
     for i in range(len(position_paths)): # Iterate through each Path
@@ -185,18 +193,46 @@ def formTensor(position_paths,models,intersectionLabels,oneWayLabels):
                     intersections.append(False)
             for k in range(len(oneWayLabels)):
                 if position_paths[i][j] == oneWayCoordinates[k]:
-                    oneWay.append(oneWayDirections[k])
+                    if oneWayDirections[k] == 'Up':
+                        oneWayUp.append(True)
+                        oneWayDown.append(False)
+                        oneWayLeft.append(False)
+                        oneWayRight.append(False)
+                    elif oneWayDirections[k] == 'Down':
+                        oneWayUp.append(False)
+                        oneWayDown.append(False)
+                        oneWayLeft.append(False)
+                        oneWayRight.append(False)
+                    elif oneWayDirections[k] == 'Left':
+                        oneWayUp.append(False)
+                        oneWayDown.append(False)
+                        oneWayLeft.append(True)
+                        oneWayRight.append(False)
+                    elif oneWayDirections[k] == 'Right':
+                        oneWayUp.append(False)
+                        oneWayDown.append(False)
+                        oneWayLeft.append(False)
+                        oneWayRight.append(True)
                     break
-                if k == len(oneWayLabels)-1:
+                elif k == len(oneWayLabels)-1:
                     oneWay.append(False)
-        tensor.append((position_paths[i],models[i],intersections,oneWay))
+                    oneWayUp.append(False)
+                    oneWayRight.append(False)
+                    oneWayDown.append(False)
+                    oneWayLeft.append(False)
+                    
+        tensor.append((position_paths[i],models[i],intersections,oneWayUp,
+                       oneWayRight,oneWayDown,oneWayLeft))
+        # Reset Loop Arrays
         intersections = []
-        oneWay = []
-    print(tensor[0])
-    print(len(tensor[0][0]))
-    print(len(tensor[0][1]))
-    print(len(tensor[0][2]))
-    print(len(tensor[0][3]))
-    return 0
+        oneWayUp = []
+        oneWayRight = []
+        oneWayDown = []
+        oneWayLeft = []
+    return tensor
+
+def formTensor(rawData,device):
+    
+    pass
 
 generate_dataset()
