@@ -1,5 +1,11 @@
+from datetime import timedelta
 from pathfinding.core.grid import Grid
 from pathfinding.finder.a_star import AStarFinder
+from stonesoup.types.state import State
+from stonesoup.models.transition.linear import KnownTurnRate
+from stonesoup.models.transition.linear import CombinedLinearGaussianTransitionModel, \
+                                               ConstantVelocity
+
 import numpy as np
 
 import torch
@@ -174,8 +180,12 @@ def generateLegalPath(matrix,start,end,oneWay):
     return path, relativePath
 
 def formatData(position_paths,models,intersectionLabels,oneWayLabels):
-    tensor = []
+    rawData = []
     intersections = []
+    x = []
+    xvel = []
+    y = []
+    yvel = []
     oneWay = []
     oneWayUp = []
     oneWayRight = []
@@ -185,6 +195,23 @@ def formatData(position_paths,models,intersectionLabels,oneWayLabels):
     oneWayDirections = [e[2] for e in oneWayLabels]
     for i in range(len(position_paths)): # Iterate through each Path
         for j in range(len(position_paths[i])): #Check each point in trajectory
+            x.append(position_paths[i][j][0])
+            y.append(position_paths[i][j][1])
+            if models[i][j] == 'Up':
+                xvel.append(0)
+                yvel.append(1/5)
+            elif models[i][j] == 'Down':
+                xvel.append(0)
+                yvel.append(-1/5)
+            elif models[i][j] == 'Left':
+                xvel.append(-1/5)
+                yvel.append(0)
+            elif models[i][j] == 'Right':
+                xvel.append(1/5)
+                yvel.append(0)
+            else: # For Turns and Initial Position
+                 xvel.append('N/A')
+                 yvel.append('N/A')
             for k in range(len(intersectionLabels)):
                 if position_paths[i][j] == intersectionLabels[k]:
                     intersections.append(True)
@@ -221,18 +248,124 @@ def formatData(position_paths,models,intersectionLabels,oneWayLabels):
                     oneWayDown.append(False)
                     oneWayLeft.append(False)
                     
-        tensor.append((position_paths[i],models[i],intersections,oneWayUp,
-                       oneWayRight,oneWayDown,oneWayLeft))
+        rawData.append([x,
+                        xvel,
+                        y,
+                        yvel,
+                        intersections,
+                        oneWayUp,
+                        oneWayRight,
+                        oneWayDown,
+                        oneWayLeft,
+                        models[i]])
         # Reset Loop Arrays
+        x = []
+        xvel = []
+        y = []
+        yvel = []
         intersections = []
         oneWayUp = []
         oneWayRight = []
         oneWayDown = []
         oneWayLeft = []
-    return tensor
+    
+    print(len(rawData[500][0]))
+    print(len(rawData[500][1]))
+    print(len(rawData[500][2]))
+    print(len(rawData[500][3]))
+    print(len(rawData[500][4]))
+    print(len(rawData[500][5]))
+    print(len(rawData[500][6]))
+    print(len(rawData[500][7]))
+    print(len(rawData[500][8]))
+    print(len(rawData[500][9]))
+    print(rawData[500])
+    return rawData
+
+def add_noise(rawData):
+    for i in range(rawData):
+        pass
+        
+
+def interpolateTrajectories(rawData):
+    n = 5
+    deltax = 1/n
+    # n should equal 5
+    # Add n-1 states "behind"
+    # Turns happen in 4 seconds
+    # First state shares labels with current iteration
+    # Second state shares labels with previous
+    interpolatedTrajectories = []
+    x = []
+    xvel = [] 
+    y = []
+    yvel=[]
+    intersections=[]
+    oneWayUp=[]
+    oneWayRight=[]
+    oneWayDown=[]
+    oneWayLeft=[]
+    models = []
+    for i in range(len(rawData)):
+        for j in range(1,len(rawData[i][9])):
+            if rawData[i][9][j] != 'Left Turn' or rawData[i][9][j] != 'Right Turn': #If not turning apply CV model
+                x, xvel, y, yvel = interpolatedTrajectories(interpolateConstantVelocity([rawData[i][0][j],
+                                                            rawData[i][1][j],
+                                                            rawData[i][2][j],
+                                                            rawData[i][3][j]]))
+                for k in range(len(x)):
+                    interpolatedTrajectories.append((x[k],
+                                                     xvel[k],
+                                                     y[k],
+                                                     yvel[k],
+                                                     rawData[i][4][j],
+                                                     rawData[i][5][j],
+                                                     rawData[i][6][j],
+                                                     rawData[i][7][j],
+                                                     rawData[i][8][j]))
+                                                     #rawData[i][9][j])
+            else:
+                sugma
+                
+                                                    
+
+    pass
+
+
+def interpolateConstantVelocity(x,xvel,y,yvel,intersection,oneWayUp,oneWayRight,oneWayDown,oneWayLeft,model):
+    originalState = State(state_vector=np.array([x,xvel,y,yvel]))
+    timediff = timedelta(seconds=1)
+    q_x = 0.005
+    q_y = 0.005
+    transitionModelCV = CombinedLinearGaussianTransitionModel([ConstantVelocity(q_x),
+                                                          ConstantVelocity(q_y)])
+    states = [transitionModelCV.function(originalState, noise=True, time_interval=-2*timediff),
+              transitionModelCV.function(originalState, noise=True, time_interval=-1*timediff),
+              originalState.state_vector,
+              transitionModelCV.function(originalState, noise=True, time_interval=timediff),
+              transitionModelCV.function(originalState, noise=True, time_interval=2*timediff)]
+    x = []
+    xvel = []
+    y = []
+    yvel = []
+    for i in range(states):
+        x.append(states[0])
+        xvel.append(states[1])
+        y.append(states[2])
+        yvel.append(states[3])
+    return x, xvel, y, yvel
+
+def interpolateTurn(initialPosition,turnDirection):
+    # Propagate forward 3 timesteps
+    if turnDirection == 'Right Turn':
+        model = KnownTurnRate(turn_noise_diff_coeffs=0,turn_rate=-np.pi/2/4)
+    else:
+        model = KnownTurnRate(turn_noise_diff_coeffs=0,turn_rate=np.pi/2/4)
+    initialState = State(state_vector = np.array(initialPosition[0]))
+    pass
 
 def formTensor(rawData,device):
     
     pass
 
-generate_dataset()
+#generate_dataset()
