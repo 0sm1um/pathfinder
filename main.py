@@ -1,3 +1,5 @@
+# If its stupid and it works, it probably wasn't stupid - Marcus Aurelius
+# The devil is in the details - Dr. Ruixin Niu
 from datetime import timedelta
 from pathfinding.core.grid import Grid
 from pathfinding.finder.a_star import AStarFinder
@@ -14,14 +16,20 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def generate_dataset():
     matrix = tile_map(num_tiles = 6)
-    intersectionLabels = labelIntersections(matrix)
-    oneWayLabels = labelOneWayStreet(matrix)
+    intersectionLabels = label_intersections(matrix)
+    oneWayLabels = label_one_way_street(matrix)
     position_paths, models = generate_paths(matrix,oneWayLabels)
-    print('Trajectory Data Complete')
-    rawData = formatData(position_paths,models,intersectionLabels,oneWayLabels)
+    print('Trajectory Data Generation Complete')
+    rawData = format_data(position_paths,models,intersectionLabels,oneWayLabels)
     print('Ground Truth Data Formatted')
-    interp_data = interpolateTrajectories(rawData)
+    interp_data = interpolate_trajectories(rawData)
     print('Grid Interpolated')
+    #
+    print('Measurements Generated')
+    
+    print('Predictions Generated')
+    
+    print('Pytorch Tensor Formed')
     #formTensor(rawData,device)
     return rawData
 
@@ -71,8 +79,8 @@ def generate_paths(matrix,oneWayLabels):
         for j in range(boundary_index):
             matrix = tile_map(num_tiles = 6)
             end = (boundary_index,j) # Right Wall
-            path,relativePath = generateLegalPath(matrix,start,end,oneWayLabels)
-            reversePath,reverseRelativePath = generateLegalPath(matrix,end,start,oneWayLabels)
+            path,relativePath = generate_legal_path(matrix,start,end,oneWayLabels)
+            reversePath,reverseRelativePath = generate_legal_path(matrix,end,start,oneWayLabels)
             position.append(path)
             position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
@@ -83,8 +91,8 @@ def generate_paths(matrix,oneWayLabels):
         for j in range(boundary_index):
             matrix = tile_map(num_tiles = 6)
             end = (i,boundary_index) # Top Wall
-            path,relativePath = generateLegalPath(matrix,start,end,oneWayLabels)
-            reversePath,reverseRelativePath = generateLegalPath(matrix,end,start,oneWayLabels)
+            path,relativePath = generate_legal_path(matrix,start,end,oneWayLabels)
+            reversePath,reverseRelativePath = generate_legal_path(matrix,end,start,oneWayLabels)
             position.append(path)
             position.append(reversePath)
             models.append(relative2motionmodel(relativePath))
@@ -125,7 +133,7 @@ def relative2motionmodel(relativePath):
                 relativePath[i-1] = 'Left Turn'
     return relativePath
 
-def labelIntersections(matrix):
+def label_intersections(matrix):
     # First we need to label intersections.
     intersections = []
     boundary_index = matrix.shape[0]-1
@@ -146,7 +154,7 @@ def labelIntersections(matrix):
                     intersections.append((i,j+1)) # Mark Adjacent Point Vertically
     return list(set([i for i in intersections]))
 
-def labelOneWayStreet(matrix):
+def label_one_way_street(matrix):
     ''' Note that these streets were arbitrarily chosen. Choosing these
     4 streets were simply aesthetically pleasing.'''
     boundary_index = matrix.shape[0]-1
@@ -158,7 +166,7 @@ def labelOneWayStreet(matrix):
         oneWay.append((i,24,'Right'))
     return oneWay
 
-def generateLegalPath(matrix,start,end,oneWay):
+def generate_legal_path(matrix,start,end,oneWay):
     pathIsLegal = False
     grid = Grid(matrix=matrix)
     finder = AStarFinder()
@@ -182,7 +190,7 @@ def generateLegalPath(matrix,start,end,oneWay):
         pathIsLegal = True
     return path, relativePath
 
-def formatData(position_paths,models,intersectionLabels,oneWayLabels):
+def format_data(position_paths,models,intersectionLabels,oneWayLabels):
     rawData = []
     intersections = []
     x = []
@@ -290,7 +298,7 @@ def add_noise(rawData):
         pass
         
 
-def interpolateTrajectories(rawData):
+def interpolate_trajectories(rawData):
     n = 5
     deltax = 1/n
     # n should equal 5
@@ -313,10 +321,10 @@ def interpolateTrajectories(rawData):
     for i in range(len(rawData)):
         for j in range(1,len(rawData[i][9])):
             if rawData[i][9][j] != 'Left Turn' and rawData[i][9][j] != 'Right Turn': #If not turning apply CV model
-                xi, xivel, yi, yivel = interpolateConstantVelocity(rawData[i][0][j],
-                                                               rawData[i][1][j],
-                                                               rawData[i][2][j],
-                                                               rawData[i][3][j])
+                xi, xivel, yi, yivel = interpolate_CV(rawData[i][0][j],
+                                                      rawData[i][1][j],
+                                                      rawData[i][2][j],
+                                                      rawData[i][3][j])
                 x.extend(xi)
                 xvel.extend(xivel)
                 y.extend(yi)
@@ -330,7 +338,7 @@ def interpolateTrajectories(rawData):
                     models.append(rawData[i][9][j])
             else:
                 try:
-                    xi, xivel, yi, yivel = interpolateTurn(x[-1],
+                    xi, xivel, yi, yivel = interpolate_turn(x[-1],
                                                        xvel[-1],
                                                        y[-1],
                                                        yvel[-1],
@@ -384,7 +392,7 @@ def interpolateTrajectories(rawData):
     return interpolatedData
 
 
-def interpolateConstantVelocity(x,xvel,y,yvel):
+def interpolate_CV(x,xvel,y,yvel):
     originalState = State(state_vector=np.array([x,xvel,y,yvel]))
     timediff = timedelta(seconds=1)
     q_x = 0.005
@@ -412,7 +420,7 @@ def interpolateConstantVelocity(x,xvel,y,yvel):
         yvel.append(states[i][3])
     return x, xvel, y, yvel
 
-def interpolateTurn(xi,vxi,yi,vyi,turnDirection):
+def interpolate_turn(xi,vxi,yi,vyi,turnDirection):
     # Propagate forward 3 timesteps
     x = []
     xvel = []
@@ -435,7 +443,13 @@ def interpolateTurn(xi,vxi,yi,vyi,turnDirection):
         yvel.append(states[i][3])
     return x, xvel, y, yvel
 
-def formTensor(rawData,device):
+def generate_measurements(ground_truth_tensor,measurement_model):
+    pass
+
+def generate_predictions(ground_truth_tensor,model_list):
+    pass
+
+def form_tensor(rawData,device):
     
     pass
 
