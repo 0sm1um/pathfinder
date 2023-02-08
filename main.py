@@ -391,11 +391,16 @@ def interpolateConstantVelocity(x,xvel,y,yvel):
     q_y = 0.005
     transitionModel = CombinedLinearGaussianTransitionModel([ConstantVelocity(q_x),
                                                           ConstantVelocity(q_y)])
-    states = [transitionModel.function(originalState, noise=True, time_interval=-2*timediff),
-              transitionModel.function(originalState, noise=True, time_interval=-1*timediff),
-              originalState.state_vector,
+    originalState = State(state_vector=transitionModel.function(
+                          originalState,
+                          noise=True, 
+                          time_interval=-2*timediff))
+    states = [originalState.state_vector,
               transitionModel.function(originalState, noise=True, time_interval=timediff),
-              transitionModel.function(originalState, noise=True, time_interval=2*timediff)]
+              transitionModel.function(originalState, noise=True, time_interval=2*timediff),
+              transitionModel.function(originalState, noise=True, time_interval=3*timediff),
+              transitionModel.function(originalState, noise=True, time_interval=4*timediff)]
+    
     x = []
     xvel = []
     y = []
