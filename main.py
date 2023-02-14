@@ -1,11 +1,16 @@
 # If its stupid and it works, it probably wasn't stupid - Marcus Aurelius
 # The devil is in the details - Dr. Ruixin Niu
+#from .datasetDefinition import SimulatedTrajectoryDataset
 from datetime import datetime, timedelta
 from pathfinding.core.grid import Grid
 from pathfinding.finder.a_star import AStarFinder
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, Dataset, random_split
+
+import pandas as pd
+
 
 from stonesoup.types.state import State
 from stonesoup.types.detection import Detection
@@ -16,25 +21,51 @@ from stonesoup.models.measurement.linear import LinearGaussian
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
+class SimulatedTrajectoryDataset(Dataset):
+    """Simulated Trajectories PyTorch Dataset Class"""
+
+    def __init__(self, tensor, transform=None):
+        assert torch.is_tensor(tensor) == True
+        self.trajectory_data = tensor
+        self.transform = transform
+
+    def __len__(self):
+        return self.trajectory_data.size(dim=0)
+
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.tolist()
+        sample = self.trajectory_data[idx][0:18]
+        model = self.trajectory_data[idx][19]
+        if self.transform:
+            sample = self.transform(sample)
+        return sample, model
 
 def generate_dataset():
     matrix = tile_map(num_tiles = 6)
     intersectionLabels = label_intersections(matrix)
-    print('Intersections Defined')
+    print('Intersections Labeled and Defined')
     oneWayLabels = label_one_way_street(matrix)
-    print('One Way Streets Labelled and Defined')
+    print('One Way Streets Labeled and Defined')
     position_paths, models = generate_paths(matrix,oneWayLabels)
     print('Trajectory Data Generation Complete')
     rawData = format_data(position_paths,models,intersectionLabels,oneWayLabels)
     print('Ground Truth Data Formatted')
     groundTruthData = interpolate_trajectories(rawData)
-    print('Ground Truth Data Generate')
-    measurementData = generate_measurements(groundTruthData)
-    print('Measurements Generated')
-    predictionData,models = generate_predictions(groundTruthData)
+    print('Ground Truth Data Interpolated')
+    predictionData = generate_predictions(groundTruthData)
     print('Predictions Generated')
-    data_tensor,model_tensor = form_tensor(predictionData,models,device)
-    print('Pytorch Tensor Formed')
+    predictions_tensor = form_tensor(predictionData,device)
+    print('Pytorch Tensors Formed')
+    predictions_dataset = SimulatedTrajectoryDataset(predictions_tensor)
+    print(predictions_tensor.size())
+    training_data, testing_data = random_split(predictions_dataset,
+                                               [int(np.ceil(len(predictions_dataset)*0.7)),
+                                                int(np.floor(len(predictions_dataset)*0.3))])
+    print('Partitioned into training and testing data of lengths: '+
+          str(len(training_data))+' and '+str(len(testing_data)))
+    write_dataset_to_file(predictions_dataset, training_data, testing_data)
+    print('Datasets written to files.')
 
 def tile_map(num_tiles):
     '''
@@ -131,9 +162,9 @@ def relative2motionmodel(relativePath):
             elif relativePath[i-1] == 'Down' and relativePath[i] == 'Left':
                 relativePath[i-1] = 'Right Turn'
             elif relativePath[i-1] == 'Left' and relativePath[i] == 'Up':
-                relativePath[i-1] = 'Right Turn'
+                relativePath[i-1] = 1
             else:
-                relativePath[i-1] = 'Left Turn'
+                relativePath[i-1] = -1
     return relativePath
 
 def label_intersections(matrix):
@@ -211,21 +242,33 @@ def format_data(position_paths,models,intersectionLabels,oneWayLabels):
         for j in range(len(position_paths[i])): #Check each point in trajectory
             x.append(position_paths[i][j][0])
             y.append(position_paths[i][j][1])
+            # Add Base Velocities and reformat Model List
+            # Note: 0 is Constant Velocity Model
+            # Note: 1 is Right Turn Model
+            # Note: -1 is Left Turn Model
             if models[i][j] == 'Up':
                 xvel.append(0)
                 yvel.append(1/5)
+                models[i][j] = 0
             elif models[i][j] == 'Down':
                 xvel.append(0)
                 yvel.append(-1/5)
+                models[i][j] = 0
             elif models[i][j] == 'Left':
                 xvel.append(-1/5)
                 yvel.append(0)
+                models[i][j] = 0
             elif models[i][j] == 'Right':
                 xvel.append(1/5)
                 yvel.append(0)
+                models[i][j] = 0
             else: # For Turns and Initial Position
                  xvel.append('N/A')
                  yvel.append('N/A')
+                 if models[i][j] == 1:
+                     models[i][j] = 1
+                 else:
+                     models[i][j] = -1
             for k in range(len(intersectionLabels)):
                 if position_paths[i][j] == intersectionLabels[k]:
                     intersections.append(True)
@@ -303,7 +346,7 @@ def interpolate_trajectories(rawData):
     interpolatedData = []
     for i in range(len(rawData)):
         for j in range(1,len(rawData[i])):
-            if rawData[i][j][9] != 'Left Turn' and rawData[i][j][9] != 'Right Turn': #If not turning apply CV model
+            if rawData[i][j][9] == 0: #If not turning apply CV model
                 xi, xivel, yi, yivel = _interpolate_CV(rawData[i][j][0],
                                                       rawData[i][j][1],
                                                       rawData[i][j][2],
@@ -339,7 +382,8 @@ def interpolate_trajectories(rawData):
                     oneWayDown.append(rawData[i][j][7])
                     oneWayLeft.append(rawData[i][j][8])
                     models.append(rawData[i][j][9])
-
+        if len(x) == 0: # If 
+            continue
         interpolatedData.append([(x[k],
                                  xvel[k],
                                  y[k],
@@ -399,7 +443,7 @@ def _interpolate_turn(xi,vxi,yi,vyi,turnDirection):
     yvel = []
     q = [0.005, 0.005]
     timediff = timedelta(seconds=1)
-    if turnDirection == 'Right Turn':
+    if turnDirection == 1:
         transitionModel = KnownTurnRate(turn_noise_diff_coeffs=q,turn_rate=-np.pi/2/4)
     else:
         transitionModel = KnownTurnRate(turn_noise_diff_coeffs=q,turn_rate=np.pi/2/4)
@@ -414,41 +458,19 @@ def _interpolate_turn(xi,vxi,yi,vyi,turnDirection):
         yvel.append(states[i][3])
     return x, xvel, y, yvel
 
-def generate_measurements(ground_truth_tensor):#,measurement_model):
-    # This doesn't touch pytorch so we are using a list of Stonesoup State Objects
-    # List is 2D, first dimension is trajectory number, second is 
+def generate_predictions(groundTruthData):#:,model_list):
+    model_list = [KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=np.pi/2/4),
+                  KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=-np.pi/2/4),
+                  CombinedLinearGaussianTransitionModel([ConstantVelocity(0.005),
+                                                         ConstantVelocity(0.005)])]
     measurement_model = LinearGaussian(ndim_state=4,  # Number of state dimensions (position and velocity in 2D)
                                        mapping=(0, 2),  # Mapping measurement vector index to state index
                                        noise_covar=np.array([[0.25, 0],  # Covariance matrix for Gaussian PDF
                                                              [0, 0.25]])
                                        )
-    trajectoryMeasurements = []
-    initial_timestamp = datetime(2023, 2, 9, 15, 44)
-    timediff = timedelta(seconds=1)
-    for i in range(len(ground_truth_tensor)):
-        measVector = []
-        for j in range(len(ground_truth_tensor[i])):
-            state = State(state_vector = [ground_truth_tensor[i][j][0],
-                                          ground_truth_tensor[i][j][1],
-                                          ground_truth_tensor[i][j][2],
-                                          ground_truth_tensor[i][j][3]],
-                                          timestamp = initial_timestamp+timediff*j)
-            measVector.append(Detection(state_vector = measurement_model.function(
-                              state, noise=True, measurement_model = measurement_model)))
-        trajectoryMeasurements.append(measVector)
-    return trajectoryMeasurements
-
-def generate_predictions(groundTruthData):#:,model_list):
-    # This doesn't touch pytorch so we are using a list of Stonesoup State Objects
-    # List is 2D, first dimension is trajectory number, second is 
-    model_list = [KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=np.pi/2/4),
-                  KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=-np.pi/2/4),
-                  CombinedLinearGaussianTransitionModel([ConstantVelocity(0.005),
-                                                         ConstantVelocity(0.005)])]
     initial_timestamp = datetime(2023, 2, 9, 15, 44)
     timediff = timedelta(seconds=1)
     predData = []
-    modelData = []
     for i in range(len(groundTruthData)):
         xCV = []
         xvCV = []
@@ -462,19 +484,35 @@ def generate_predictions(groundTruthData):#:,model_list):
         xvRT = []
         yRT = []
         yvRT = []
+        xmeas = []
+        ymeas = []
         intersections = []
         oneWayUp = []
         oneWayRight = []
         oneWayDown = []
         oneWayLeft = []
         models = []
-        for j in range(len(groundTruthData[i])):
+        state = State(state_vector = [groundTruthData[i][0][0],
+                                      groundTruthData[i][0][1],
+                                      groundTruthData[i][0][2],
+                                      groundTruthData[i][0][3]],
+                                      timestamp = initial_timestamp)
+        measurement = measurement_model.function(state, noise=True)
+        xmeas = [measurement[0]]
+        ymeas = [measurement[1]]
+        for j in range(len(groundTruthData[i])-1):
             state = State(state_vector = [groundTruthData[i][j][0],
                                           groundTruthData[i][j][1],
                                           groundTruthData[i][j][2],
                                           groundTruthData[i][j][3]],
                                           timestamp = initial_timestamp+timediff*j)
             predictions = [m.function(state=state,time_interval=timedelta(seconds=1)) for m in model_list]
+            state = State(state_vector = [groundTruthData[i][j][0],
+                                          groundTruthData[i][j][1],
+                                          groundTruthData[i][j][2],
+                                          groundTruthData[i][j][3]],
+                                          timestamp = initial_timestamp+timediff*j)
+            measurement = measurement_model.function(state, noise=True)
             xCV.append(predictions[0][0])
             xvCV.append(predictions[0][1])
             yCV.append(predictions[0][2])
@@ -487,6 +525,8 @@ def generate_predictions(groundTruthData):#:,model_list):
             xvRT.append(predictions[2][1])
             yRT.append(predictions[2][2])
             yvRT.append(predictions[2][3])
+            xmeas.append(measurement[0])
+            ymeas.append(measurement[1])
             intersections.append(groundTruthData[i][j][4])
             oneWayUp.append(groundTruthData[i][j][5])
             oneWayRight.append(groundTruthData[i][j][6])
@@ -506,22 +546,27 @@ def generate_predictions(groundTruthData):#:,model_list):
                           xvRT[k],
                           yRT[k],
                           yvRT[k],
+                          xmeas[k],
+                          ymeas[k],
                           intersections[k],
                           oneWayUp[k],
                           oneWayRight[k],
                           oneWayDown[k],
-                          oneWayLeft[k]) for k in range(len(xCV))])
-        modelData.extend(models)
-    return predData, models
+                          oneWayLeft[k],
+                          models[k]) for k in range(len(xCV))])
+    return predData
 
-def form_tensor(inputData,models,device):   
+def form_tensor(inputData,device):
     # This is the final step to feed trajectory data into pytorch dataset.
     # Unpack all trajectory prediction data into a BIG 2D tensor
     fullDataset = torch.tensor(inputData[0])
-    models = torch.tensor(models)
     for i in range(1,len(inputData)):
         trajectory = torch.tensor(inputData[i])
         fullDataset = torch.cat((fullDataset,trajectory))
-    return fullDataset, models
+    return fullDataset
 
-generate_dataset()
+def write_dataset_to_file(full_dataset,train_data,test_data):
+    pdFullData = pd.DataFrame(full_dataset.trajectory_data.numpy())
+    pdFullData.to_csv('full_data.csv',encoding='utf-8',index=False)
+    
+tensor = generate_dataset()
