@@ -47,30 +47,40 @@ class SimulatedTrajectoryDataset(Dataset):
             sample = self.transform(sample)
         return sample, model
 
-data_tensor = torch.load('full_data_tensor.pt',map_location = device)
-constant_velocity_weight = (data_tensor[:,19] == 0.).sum(dim=0)/len(data_tensor)
-right_turn_weight = (data_tensor[:,19] == 1.).sum(dim=0)/len(data_tensor)
-left_turn_weight = (data_tensor[:,19] == 2.).sum(dim=0)/len(data_tensor)
-weights = torch.tensor([constant_velocity_weight, right_turn_weight,left_turn_weight],device=device)
 
-print('Class Weights: '+ str(weights))
+test_tensor = torch.load('full_data_tensor.pt',map_location = device)
+train_tensor = torch.load('intersection_data_tensor.pt',map_location = device)
 
-normalized_data_tensor = nn.functional.normalize(data_tensor,p=1,dim=1)
+constant_velocity_weight = (train_tensor[:,19] == 0.).sum(dim=0)/len(train_tensor)
+right_turn_weight = (train_tensor[:,19] == 1.).sum(dim=0)/len(train_tensor)
+left_turn_weight = (train_tensor[:,19] == 2.).sum(dim=0)/len(train_tensor)
+train_weights = torch.tensor([constant_velocity_weight, right_turn_weight,left_turn_weight],device=device)
 
-predictions_dataset = SimulatedTrajectoryDataset(normalized_data_tensor)
+constant_velocity_weight = (test_tensor[:,19] == 0.).sum(dim=0)/len(test_tensor)
+right_turn_weight = (test_tensor[:,19] == 1.).sum(dim=0)/len(test_tensor)
+left_turn_weight = (test_tensor[:,19] == 2.).sum(dim=0)/len(test_tensor)
+test_weights = torch.tensor([constant_velocity_weight, right_turn_weight,left_turn_weight],device=device)
 
+print('Class Weights: '+' for training set: '+str(train_weights))
+print('Class Weights: '+' for testing set: '+str(test_weights))
 
-train_dataset, test_dataset = random_split(predictions_dataset,
-                                           [int(np.ceil(len(predictions_dataset)*0.7)),
-                                            int(np.floor(len(predictions_dataset)*0.3))])
+#normalized_data_tensor = nn.functional.normalize(data_tensor,p=1,dim=1)
+
+train_dataset = SimulatedTrajectoryDataset(nn.functional.normalize(train_tensor,p=1,dim=1))
+test_dataset = SimulatedTrajectoryDataset(nn.functional.normalize(test_tensor,p=1,dim=1))
+
+#train_dataset, test_dataset = random_split(predictions_dataset,
+#                                           [int(np.ceil(len(predictions_dataset)*0.7)),
+#                                            int(np.floor(len(predictions_dataset)*0.3))])
+
 print('Partitioned into training and testing data of lengths: '+
       str(len(train_dataset))+' and '+str(len(test_dataset)))
 
-sampler = WeightedRandomSampler(weights, num_samples = len(train_dataset), replacement = True)
+sampler = WeightedRandomSampler(train_weights, num_samples = len(train_dataset), replacement = True)
 
-batch_size=128;
-#trainloader = torch.utils.data.DataLoader(train_dataset,batch_size=batch_size,sampler = sampler)
-trainloader = torch.utils.data.DataLoader(train_dataset,batch_size=batch_size,shuffle=True)
+batch_size=64;
+trainloader = torch.utils.data.DataLoader(train_dataset,batch_size=batch_size,sampler = sampler)
+#trainloader = torch.utils.data.DataLoader(train_dataset,batch_size=batch_size,shuffle=True)
 testloader = torch.utils.data.DataLoader(test_dataset,batch_size=batch_size,shuffle=False)
 
 '''Here we define the neural network:'''
@@ -78,31 +88,52 @@ testloader = torch.utils.data.DataLoader(test_dataset,batch_size=batch_size,shuf
 
 input_size = 18
 num_classes = 3 # Num Classes
-hidden_size = 50
+hidden_size = 150
 
 class FullyConnectedNetwork(nn.Module):
     def __init__(self):
         super(FullyConnectedNetwork, self).__init__()
         self.layer1 = nn.Linear(input_size, hidden_size)
         self.relu = nn.ReLU()
-        self.layer3 = nn.Linear(hidden_size, num_classes)
+        self.layer2 = nn.Linear(hidden_size, num_classes)
 
     def forward(self, x):
         x = self.layer1(x)
         x = self.relu(x)
-        x = self.layer3(x)
         #return F.log_softmax(x, dim=1) # For NLL Loss
         return F.softmax(x, dim=1) # For Cross Entropy Loss
+
+'''
+class ConvNet(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv1d(128, 1, input_size)
+        self.pool = nn.MaxPool1d(2, 2)
+        self.conv2 = nn.Conv1d(6, 16, 5)
+        self.fclayer1 = nn.Linear(input_size, hidden_size)
+        self.fclayer2 = nn.Linear(hidden_size, hidden_size)
+        self.fclayer3 = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1) # flatten all dimensions except batch
+        x = F.relu(self.fclayer1(x))
+        x = F.relu(self.fclayer2(x))
+        x = self.fclayer3(x)
+        return F.softmax(x, dim=1)
+'''
+
 
 '''Instantiate the neural network, set our learning rate, and instantiate optimizer.'''
 
 model=FullyConnectedNetwork().to(device);
 #loss_criterion = F.nll_loss;
 loss_criterion = nn.CrossEntropyLoss()
-learning_rate = 0.001;
+learning_rate = 0.00001;
 # note that we have to add all weights&biases, for both layers, to the optimizer
 optimizer = torch.optim.Adam(model.parameters(),lr=learning_rate)
-n_epochs = 15;
+n_epochs = 5;
 num_updates = n_epochs*int(np.ceil(len(trainloader.dataset)/batch_size))
 # warmup_steps=1000;
 #def warmup_linear(x):
@@ -118,21 +149,21 @@ print('Entering Training Loop:')
 for i in range(n_epochs):
     for j, (inputs, labels) in enumerate(trainloader):
       
-        inputs=inputs.to(device);
+        inputs=inputs.to(device)
         labels = labels.type(torch.LongTensor)
-        labels=labels.to(device);
+        labels=labels.to(device)
         
 
         #forward phase - predictions by the model
-        outputs = model(inputs);
+        outputs = model(inputs)
         loss = loss_criterion(outputs, labels)
 
         # calculate gradients
-        optimizer.zero_grad();
-        loss.backward();
+        optimizer.zero_grad()
+        loss.backward()
 
         # take the gradient step
-        optimizer.step();
+        optimizer.step()
 #        scheduler.step();
 
         batch_loss=loss.item();  

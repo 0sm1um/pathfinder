@@ -23,22 +23,38 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 def generate_dataset():
     matrix = tile_map(num_tiles = 6)
-    intersectionLabels = label_intersections(matrix,6)
+    intersection_locations = label_intersections(matrix,6)
     print('Intersections Labeled and Defined')
-    oneWayLabels = label_one_way_street(matrix)
+    one_way_labels = label_one_way_street(matrix)
     print('One Way Streets Labeled and Defined')
-    position_paths, models = generate_paths(matrix,oneWayLabels)
+    long_position_paths, long_models = generate_long_paths(matrix,one_way_labels)
+    intersection_paths, intersection_models = generate_turning_paths(matrix,intersection_locations,one_way_labels,1)
     print('Trajectory Data Generation Complete')
-    rawData = format_data(position_paths,models,intersectionLabels,oneWayLabels)
+    n = 9
+    print('Interpolation scheme set to split grid into '+str(n)+' distinct time steps.')
+    raw_long_data = format_data(long_position_paths,long_models,intersection_locations,one_way_labels,n)
+    intersection_data = format_data(intersection_paths,intersection_models,intersection_locations,one_way_labels,n)
     print('Ground Truth Data Formatted')
-    groundTruthData = interpolate_trajectories(rawData)
+    long_ground_truth = interpolate_trajectories(raw_long_data,n,(0.005,0.025,2))
+    intersections_ground_truth = interpolate_trajectories(intersection_data,n,(0.005,0.075,2))
+    num_repetitions = int(sum([4*len(l) for l in long_ground_truth])/sum([len(l) for l in intersections_ground_truth]))
+    for i in range(num_repetitions): # Generate turns until datasets are balanced
+        intersections_ground_truth.extend(interpolate_trajectories(intersection_data,n,(0.005,0.075,2)))
     print('Ground Truth Data Interpolated')
-    predictionData = generate_predictions(groundTruthData)
+    long_prediction_data = generate_predictions(long_ground_truth,n)
+    intersections_prediction_data = generate_predictions(intersections_ground_truth,n)
     print('Predictions Generated')
-    predictions_tensor = form_tensor(predictionData,device)
+    long_predictions_tensor = form_tensor(long_prediction_data,device)
+    intersection_predictions_tensor = form_tensor(intersections_prediction_data,device)
     print('Pytorch Tensors Formed')
-    write_dataset_to_file(predictions_tensor)
+    write_dataset_to_file(long_predictions_tensor, 'full_data_tensor.pt')
+    write_dataset_to_file(intersection_predictions_tensor, 'intersection_data_tensor.pt')
     print('Dataset written to files.')
+# TODO "Balance Dataset" Module
+#   Iterate around the intersections, generate paths which go through them
+#   Stop when len(newData) == len(oldData) (a balanced dataset)
+#   If that doesn't work, set start and endpoints to only be adjacent to intersection
+#   If THAT doesn't work, try to apply Transfer Learning. Train on intersections first
 
 def tile_map(num_tiles):
     '''
@@ -76,73 +92,117 @@ def tile_map(num_tiles):
     matrix = np.concatenate([matrix,np.ones([matrix.shape[0],1])],axis=1)
     return matrix
 
-def generate_paths(matrix,oneWayLabels):
+def generate_long_paths(matrix,oneWayLabels):
     position = []
     models = []
     boundary_index = matrix.shape[0]-1
-    turn_threshold = 0
+#    turn_threshold = 0
     for i in range(boundary_index):
         start = (0,i) # Left Wall
         for j in range(boundary_index):
             matrix = tile_map(num_tiles = 6)
             end = (boundary_index,j) # Right Wall
-            path,relativePath = generate_legal_path(matrix,start,end,oneWayLabels)
-            if count_turns(relative2motionmodel(relativePath)) < turn_threshold:
-                continue
-            reversePath,reverseRelativePath = generate_legal_path(matrix,end,start,oneWayLabels)
+            path,relative_path = generate_legal_path(matrix,start,end,oneWayLabels)
+#            if count_turns(relative2motionmodel(relativePath)) < turn_threshold:
+#                continue
+            matrix = tile_map(num_tiles = 6)
+            reverse_path, reverse_relative_path = generate_legal_path(matrix,end,start,oneWayLabels)
             position.append(path)
-            position.append(reversePath)
-            models.append(relative2motionmodel(relativePath))
-            models.append(relative2motionmodel(reverseRelativePath))
-
+            position.append(reverse_path)
+            models.append(relative2motionmodel(relative_path))
+            models.append(relative2motionmodel(reverse_relative_path))
+            
     for i in range(boundary_index):
         start = (i,0) # Bottom Wall
         for j in range(boundary_index):
             matrix = tile_map(num_tiles = 6)
             end = (i,boundary_index) # Top Wall
-            path,relativePath = generate_legal_path(matrix,start,end,oneWayLabels)
-            if count_turns(relative2motionmodel(relativePath)) < turn_threshold:
-                continue
-            reversePath,reverseRelativePath = generate_legal_path(matrix,end,start,oneWayLabels)
+            path,relative_path = generate_legal_path(matrix,start,end,oneWayLabels)
+            #if count_turns(relative2motionmodel(relativePath)) < turn_threshold:
+            #    continue
+            matrix = tile_map(num_tiles = 6)
+            reverse_path,reverse_relative_path = generate_legal_path(matrix,end,start,oneWayLabels)
             position.append(path)
-            position.append(reversePath)
-            models.append(relative2motionmodel(relativePath))
-            models.append(relative2motionmodel(reverseRelativePath))
-
-    ''' This is a block of code to print trajectories.
-    for i in range(len(paths)):
+            position.append(reverse_path)
+            models.append(relative2motionmodel(relative_path))
+            models.append(relative2motionmodel(reverse_relative_path))
+    '''
+     #This is a block of code to print trajectories.
+    grid = Grid(matrix=matrix)
+    for i in range(len(path)):
         print(grid.grid_str(path=position[i]))
-    print(len(paths))
+    print(len(path))
     '''
     return position, models
 
+def generate_turning_paths(matrix,intersection_locations,one_way_labels,magic_number):
+    # Intersections are used to determine start and endpoints
+    boundary_index = matrix.shape[0]-1
+    position = []
+    models = []
+    for intersection in intersection_locations:
+        if intersection[0] % 6 == 0 and intersection[1] % 6 == 0:
+            upper_bound = intersection[1] + magic_number
+            lower_bound = intersection[1] - magic_number
+            left_bound = intersection[0] - magic_number
+            right_bound = intersection[0] + magic_number
+            points = []
+            if upper_bound < boundary_index:
+                points.append((intersection[0],upper_bound))
+            if lower_bound > 0:
+                points.append((intersection[0],lower_bound))
+            if left_bound > 0:
+                points.append((left_bound,intersection[1]))
+            if right_bound < boundary_index:
+                points.append((right_bound,intersection[1]))
+            for j in points:
+                for k in points:
+                    if j == k:
+                        continue
+                    else:
+                        matrix = tile_map(num_tiles = 6)
+                        path,relativePath = generate_legal_path(matrix,j,k,one_way_labels)
+                        if len(path) > 3:
+                            continue
+                        matrix = tile_map(num_tiles = 6)
+                        reversePath,reverseRelativePath = generate_legal_path(matrix,k,j,one_way_labels)
+                        position.append(path)
+                        position.append(reversePath)
+                        models.append(relative2motionmodel(relativePath))
+                        models.append(relative2motionmodel(reverseRelativePath))
+    return position, models
+
 def coordinate2relative(path):
-    relativepath = ['Start']
-    for i in range(1,len(path)):
-        if np.array_equal((np.array(path[i])-np.array(path[i-1])),np.array([0,1])) == True:
+    relativepath = []
+    for i in range(len(path)-1):
+        if np.array_equal((np.array(path[i+1])-np.array(path[i])),np.array([0,1])) == True:
             relativepath.append('Up')
-        elif np.array_equal((np.array(path[i])-np.array(path[i-1])), np.array([0,-1])) == True:
+        elif np.array_equal((np.array(path[i+1])-np.array(path[i])), np.array([0,-1])) == True:
             relativepath.append('Down')
-        elif np.array_equal((np.array(path[i])-np.array(path[i-1])), np.array([-1,0])) == True:
+        elif np.array_equal((np.array(path[i+1])-np.array(path[i])), np.array([-1,0])) == True:
             relativepath.append('Left')
         else:
             relativepath.append('Right')
+    relativepath.append(relativepath[-1])
     return relativepath
 
 def relative2motionmodel(relativePath):
-    for i in range(2,len(relativePath)): # First entry has no direction and is labelled 'Start'
+    models = [relativePath[0]]
+    for i in range(1,len(relativePath)): # First entry has no direction and is labelled 'Start'
         if relativePath[i] != relativePath[i-1]: # Check if a turn occured
             if relativePath[i-1] == 'Up' and relativePath[i] == 'Right':
-                relativePath[i-1] = 1
+                models.append('Right Turn')
             elif relativePath[i-1] == 'Right' and relativePath[i] == 'Down':
-                relativePath[i-1] = 1
+                models.append('Right Turn')
             elif relativePath[i-1] == 'Down' and relativePath[i] == 'Left':
-                relativePath[i-1] = 1
+                models.append('Right Turn')
             elif relativePath[i-1] == 'Left' and relativePath[i] == 'Up':
-                relativePath[i-1] = 'Right Turn'
+                models.append('Right Turn')
             else:
-                relativePath[i-1] = 'Left Turn' # 2 Denotes Left Turn
-    return relativePath
+                models.append('Left Turn') # 2 Denotes Left Turn
+        else:
+            models.append(relativePath[i])
+    return models
 
 def label_intersections(matrix,magic_number):
     # First we need to label intersections.
@@ -171,10 +231,11 @@ def label_one_way_street(matrix):
     boundary_index = matrix.shape[0]-1
     oneWay = []
     for i in range(boundary_index):
-        oneWay.append((24,i,'Down'))
-        oneWay.append((i,12,'Left'))
-        oneWay.append((12,i,'Up'))
-        oneWay.append((i,24,'Right'))
+        if i == 24:
+            oneWay.append((24,i,'Down'))
+            oneWay.append((i,12,'Left'))
+            oneWay.append((12,i,'Up'))
+            oneWay.append((i,24,'Right'))
     return oneWay
 
 def generate_legal_path(matrix,start,end,oneWay):
@@ -194,6 +255,8 @@ def generate_legal_path(matrix,start,end,oneWay):
                     grid = Grid(matrix=matrix)
                     path,runs = finder.find_path(grid.node(start[0],start[1]),grid.node(end[0],end[1]),grid) # Find New Path
                     relativePath = coordinate2relative(path)
+                    if len(path) == 0:
+                        return [i for i in range(5000)] # If a path cannot be found, return a path greater than 5000 to be discarded.
                     break
                 else:
                     continue
@@ -208,7 +271,7 @@ def count_turns(relativePath):
             num_turns += 1
     return num_turns
 
-def format_data(position_paths,models,intersectionLabels,oneWayLabels):
+def format_data(position_paths,models,intersectionLabels,oneWayLabels,n):
     rawData = []
     intersections = []
     x = []
@@ -232,23 +295,23 @@ def format_data(position_paths,models,intersectionLabels,oneWayLabels):
             # Note: -1 is Left Turn Model
             if models[i][j] == 'Up':
                 xvel.append(0)
-                yvel.append(1/5)
+                yvel.append(1/n)
                 models[i][j] = 0
             elif models[i][j] == 'Down':
                 xvel.append(0)
-                yvel.append(-1/5)
+                yvel.append(-1/n)
                 models[i][j] = 0
             elif models[i][j] == 'Left':
-                xvel.append(-1/5)
+                xvel.append(-1/n)
                 yvel.append(0)
                 models[i][j] = 0
             elif models[i][j] == 'Right':
-                xvel.append(1/5)
+                xvel.append(1/n)
                 yvel.append(0)
                 models[i][j] = 0
-            else: # For Turns and Initial Position
-                 xvel.append('N/A')
-                 yvel.append('N/A')
+            else: # For Turns
+                 xvel.append(xvel[-1])
+                 yvel.append(yvel[-1])
                  if models[i][j] == 'Right Turn':
                      models[i][j] = 1 # 1 Denotes Right Turn
                  else:
@@ -312,9 +375,9 @@ def format_data(position_paths,models,intersectionLabels,oneWayLabels):
         oneWayLeft = []
     return rawData        
 
-def interpolate_trajectories(rawData):
-    # It takes 5 seconds to travel from one grid tile to another. for v=1/5
-    # Turns happen in 4 seconds due to radius of turn being ~0.78 the distance of grid
+def interpolate_trajectories(formatted_data,n,noise):
+    # It takes n seconds to travel from one grid tile to another. for v=1/n
+    # Turns happen in ~0.78*n seconds due to radius of turn being ~0.78 the distance of grid
     # First state shares labels with current iteration
     # Second state shares labels with previous
     x = []
@@ -327,48 +390,40 @@ def interpolate_trajectories(rawData):
     oneWayDown = []
     oneWayLeft = []
     models = []
-    interpolatedData = []
-    for i in range(len(rawData)):
-        for j in range(1,len(rawData[i])):
-            if rawData[i][j][9] == 0: #If not turning apply CV model
-                xi, xivel, yi, yivel = _interpolate_CV(rawData[i][j][0],
-                                                      rawData[i][j][1],
-                                                      rawData[i][j][2],
-                                                      rawData[i][j][3])
-                x.extend(xi)
-                xvel.extend(xivel)
-                y.extend(yi)
-                yvel.extend(yivel)
-                for k in range(len(xi)):
-                    intersections.append(rawData[i][j][4])
-                    oneWayUp.append(rawData[i][j][5])
-                    oneWayRight.append(rawData[i][j][6])
-                    oneWayDown.append(rawData[i][j][7])
-                    oneWayLeft.append(rawData[i][j][8])
-                    models.append(rawData[i][j][9])
+    interpolated_data = []
+    for i in range(len(formatted_data)):
+        for j in range(1,len(formatted_data[i])):
+            #q = [0.005, 0.005] # Old Fixed Noise Value
+            q = np.abs(np.random.normal(loc=noise[0],scale=noise[1],size=noise[2])) # Random noise to prevent overtraining to one noise value.
+            if formatted_data[i][j][9] == 0: #If not turning apply CV model
+                xi, xivel, yi, yivel = _interpolate_CV(formatted_data[i][j][0],
+                                                       formatted_data[i][j][1],
+                                                       formatted_data[i][j][2],
+                                                       formatted_data[i][j][3],
+                                                       q,
+                                                       n)
             else:
-                try:
-                    xi, xivel, yi, yivel = _interpolate_turn(x[-1],
-                                                       xvel[-1],
-                                                       y[-1],
-                                                       yvel[-1],
-                                                       rawData[i][9][j])
-                except IndexError: # If a turn happens at the start with no initial position, throw out trajectory.
-                    break
-                x.extend(xi)
-                xvel.extend(xivel)
-                y.extend(yi)
-                yvel.extend(yivel)
-                for k in range(len(xi)):
-                    intersections.append(rawData[i][j][4])
-                    oneWayUp.append(rawData[i][j][5])
-                    oneWayRight.append(rawData[i][j][6])
-                    oneWayDown.append(rawData[i][j][7])
-                    oneWayLeft.append(rawData[i][j][8])
-                    models.append(rawData[i][j][9])
+                xi, xivel, yi, yivel = _interpolate_turn(formatted_data[i][j][0],
+                                                         formatted_data[i][j][1],
+                                                         formatted_data[i][j][2],
+                                                         formatted_data[i][j][3],
+                                                         formatted_data[i][j][9],
+                                                         q,
+                                                         n)
+            x.extend(xi)
+            xvel.extend(xivel)
+            y.extend(yi)
+            yvel.extend(yivel)
+            for k in range(len(xi)):
+                intersections.append(formatted_data[i][j][4])
+                oneWayUp.append(formatted_data[i][j][5])
+                oneWayRight.append(formatted_data[i][j][6])
+                oneWayDown.append(formatted_data[i][j][7])
+                oneWayLeft.append(formatted_data[i][j][8])
+                models.append(formatted_data[i][j][9])
         if len(x) == 0: # If 
             continue
-        interpolatedData.append([(x[k],
+        interpolated_data.append([(x[k],
                                  xvel[k],
                                  y[k],
                                  yvel[k],
@@ -380,7 +435,7 @@ def interpolate_trajectories(rawData):
                                  models[k]) for k in range(len(x))])
         #Reset Loop Arrays
         x = []
-        xvel = [] 
+        xvel = []
         y = []
         yvel=[]
         intersections = []
@@ -389,24 +444,16 @@ def interpolate_trajectories(rawData):
         oneWayDown = []
         oneWayLeft = []
         models = []
-    return interpolatedData
+    return interpolated_data
 
-def _interpolate_CV(x,xvel,y,yvel):
+def _interpolate_CV(x,xvel,y,yvel,q,n):
     originalState = State(state_vector=np.array([x,xvel,y,yvel]))
     timediff = timedelta(seconds=1)
-    q_x = 0.005
-    q_y = 0.005
+    q_x = q[0]
+    q_y = q[1]
     transitionModel = CombinedLinearGaussianTransitionModel([ConstantVelocity(q_x),
                                                           ConstantVelocity(q_y)])
-    originalState = State(state_vector=transitionModel.function(
-                          originalState,
-                          noise=True, 
-                          time_interval=-2*timediff))
-    states = [originalState.state_vector,
-              transitionModel.function(originalState, noise=True, time_interval=timediff),
-              transitionModel.function(originalState, noise=True, time_interval=2*timediff),
-              transitionModel.function(originalState, noise=True, time_interval=3*timediff),
-              transitionModel.function(originalState, noise=True, time_interval=4*timediff)]
+    states = [transitionModel.function(originalState, noise=True, time_interval=t*timediff) for t in range(1,n+1)]
 
     x = []
     xvel = []
@@ -419,22 +466,20 @@ def _interpolate_CV(x,xvel,y,yvel):
         yvel.append(states[i][3])
     return x, xvel, y, yvel
 
-def _interpolate_turn(xi,vxi,yi,vyi,turnDirection):
+def _interpolate_turn(x,vx,y,vy,turnDirection,q,n):
     # Propagate forward 3 timesteps
+    timediff = timedelta(seconds=1)
+    num_steps = int(np.ceil(np.pi/4*n)) # Ratio of distance traveled turning versus straight
+    if turnDirection == 1:
+        transitionModel = KnownTurnRate(turn_noise_diff_coeffs=q,turn_rate=-np.pi/2/num_steps) # Turn 90 degrees per num_steps time
+    else:
+        transitionModel = KnownTurnRate(turn_noise_diff_coeffs=q,turn_rate=np.pi/2/num_steps)
+    originalState = State(state_vector = np.array([x,vx,y,vy]))
+    states = [transitionModel.function(originalState, noise=True, time_interval=t * timediff) for t in range(1,num_steps+1)]
     x = []
     xvel = []
     y = []
     yvel = []
-    q = [0.005, 0.005]
-    timediff = timedelta(seconds=1)
-    if turnDirection == 1:
-        transitionModel = KnownTurnRate(turn_noise_diff_coeffs=q,turn_rate=-np.pi/2/4)
-    else:
-        transitionModel = KnownTurnRate(turn_noise_diff_coeffs=q,turn_rate=np.pi/2/4)
-    originalState = State(state_vector = np.array([xi,vxi,yi,vyi]))
-    states = [transitionModel.function(originalState, noise=True, time_interval=timediff),
-              transitionModel.function(originalState, noise=True, time_interval=2*timediff),
-              transitionModel.function(originalState, noise=True, time_interval=3*timediff)]
     for i in range(len(states)):
         x.append(states[i][0])
         xvel.append(states[i][1])
@@ -442,11 +487,12 @@ def _interpolate_turn(xi,vxi,yi,vyi,turnDirection):
         yvel.append(states[i][3])
     return x, xvel, y, yvel
 
-def generate_predictions(groundTruthData):#:,model_list):
-    model_list = [KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=np.pi/2/4),
-                  KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=-np.pi/2/4),
-                  CombinedLinearGaussianTransitionModel([ConstantVelocity(0.005),
-                                                         ConstantVelocity(0.005)])]
+def generate_predictions(groundTruthData,n):#:,model_list):
+    model_list = [CombinedLinearGaussianTransitionModel([ConstantVelocity(0.005),
+                                           ConstantVelocity(0.005)]),
+                  KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=np.pi/2/int(np.ceil(np.pi/4*n))),
+                  KnownTurnRate(turn_noise_diff_coeffs=0.005,turn_rate=-np.pi/2/int(np.ceil(np.pi/4*n))),
+                  ]
     measurement_model = LinearGaussian(ndim_state=4,  # Number of state dimensions (position and velocity in 2D)
                                        mapping=(0, 2),  # Mapping measurement vector index to state index
                                        noise_covar=np.array([[0.25, 0],  # Covariance matrix for Gaussian PDF
@@ -545,13 +591,12 @@ def form_tensor(inputData,device):
     # Unpack all trajectory prediction data into a BIG 2D tensor
     fullDataset = torch.tensor(inputData[0],dtype=torch.float)
     for i in range(1,len(inputData)):
-        trajectory = torch.tensor(inputData[i],dtype=torch.float)
-        fullDataset = torch.cat((fullDataset,trajectory))
+        fullDataset = torch.cat((fullDataset,torch.tensor(inputData[i],dtype=torch.float)))
     return fullDataset
 
-def write_dataset_to_file(full_dataset):
+def write_dataset_to_file(full_dataset,name):
     pdFullData = pd.DataFrame(full_dataset.numpy())
     pdFullData.to_csv('full_data.csv',encoding='utf-8',index=False)
-    torch.save(full_dataset,'full_data_tensor.pt')
-    
+    torch.save(full_dataset, name)
+
 tensor = generate_dataset()
